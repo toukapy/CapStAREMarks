@@ -315,8 +315,8 @@ if __name__ == "__main__":
         "learning_rate": 1e-5,
         "weight_decay": 1e-5,
         "optimizer": "AdamW",
-        "epochs": 30,
-        "scheduler": "CosineAnnealingLR"
+        "epochs": 100,
+        "scheduler": "CosineAnnealingWarmRestarts"
     })
 
     # Transformaciones
@@ -434,7 +434,7 @@ if __name__ == "__main__":
     patience_limit = 5
     scaler = torch.amp.GradScaler('cuda')
 
-    for epoch in range(40):
+    for epoch in range(100):
         # ---------------------------
         # Training
         # ---------------------------

@@ -18,6 +18,7 @@ from mediapipe.framework.formats import landmark_pb2
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from collections import deque
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -38,6 +39,15 @@ torch.backends.cudnn.benchmark = True       # para rendimiento
 # Dataset simple (no se usa online)
 # ==========================
 from torch.utils.data import Dataset
+
+def color_from_id(track_id):
+    np.random.seed(track_id)
+    return (
+        int(np.random.randint(50, 255)),
+        int(np.random.randint(50, 255)),
+        int(np.random.randint(50, 255)),
+    )
+
 
 class GazeDataset(Dataset):
     def __init__(self, images, labels, seq_len=9):
@@ -340,9 +350,10 @@ def load_landmarker(task_path: str = 'face_landmarker_v2_with_blendshapes.task')
         base_options=base_options,
         output_face_blendshapes=False,
         output_facial_transformation_matrixes=False,
-        num_faces=1,
+        num_faces=5,  # or more
         running_mode=vision.RunningMode.VIDEO
     )
+
     detector = vision.FaceLandmarker.create_from_options(options)
     return detector
 
@@ -528,7 +539,7 @@ def draw_3d_arrow_perspective(frame, gaze_vec, origin, color=(0,0,255), thicknes
 # ==========================
 def main():
     face_detector = load_face_detector()
-    model = load_model('09112025.pth')
+    model = load_model('11012026.pth')
 
     # MediaPipe face landmarker for landmarks (as in landmarks_in_video.py)
     landmarker = load_landmarker()
@@ -543,8 +554,6 @@ def main():
                           (frame_width, frame_height))
 
     sequence_length = 12
-    face_sequence = []
-    landmarks_sequence = []
     prev_time = time.time()
 
     mapper = AxisMapper3D(
@@ -559,6 +568,9 @@ def main():
     smoother = GazeSmoother(alpha=0.4)
     calibrator = AffineCalibrator()
 
+    tracks = {}  # track_id -> buffers
+    frame_idx = 0
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -566,79 +578,87 @@ def main():
 
         # mirror for user view
         frame = cv2.flip(frame, 1)
-        faces = detect_faces(face_detector, frame)
+        mp_image = mp.Image(
+            image_format=mp.ImageFormat.SRGB,
+            data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        )
 
-        for (x, y, w, h) in faces:
-            # Draw face rectangle
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+        timestamp_ms = int(time.time() * 1000)
+        result = landmarker.detect_for_video(mp_image, timestamp_ms)
 
-            # Crop face in BGR
-            face_img_bgr = frame[y:y + h, x:x + w]
+        if not result.face_landmarks:
+            frame_idx += 1
+            continue
+        H, W, _ = frame.shape
 
-            # BGR -> RGB and resize to 224x224
+        for face_id, lmks in enumerate(result.face_landmarks):
+            track_id = face_id
+            color = color_from_id(track_id)
+
+            pts = np.array([[lm.x * W, lm.y * H] for lm in lmks])
+            x1, y1 = pts.min(axis=0).astype(int)
+            x2, y2 = pts.max(axis=0).astype(int)
+
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(W - 1, x2), min(H - 1, y2)
+            w, h = x2 - x1, y2 - y1
+
+            # Draw bounding box + ID
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, f"ID {track_id}", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+            # Init track if new
+            if track_id not in tracks:
+                tracks[track_id] = {
+                    "faces": deque(maxlen=sequence_length),
+                    "landmarks": deque(maxlen=sequence_length),
+                    "smoother": GazeSmoother(alpha=0.4),
+                    "last_seen": frame_idx
+                }
+
+            track = tracks[track_id]
+            track["last_seen"] = frame_idx
+
+            # ---- FACE CROP ----
+            face_img_bgr = frame[y1:y2, x1:x2]
+            if face_img_bgr.size == 0:
+                continue
+
             face_rgb = cv2.cvtColor(face_img_bgr, cv2.COLOR_BGR2RGB)
             face_rgb_224 = cv2.resize(face_rgb, (224, 224), interpolation=cv2.INTER_AREA)
 
-            # MediaPipe: wrap to mp.Image and get landmarks
+            # ---- LANDMARKS ----
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=face_rgb_224)
             timestamp_ms = int(time.time() * 1000)
             detection_result = landmarker.detect_for_video(mp_image, timestamp_ms)
             lmks_np = extract_landmarks_224(detection_result, img_size=224)
             if lmks_np is None:
-                # skip update if no landmarks detected
-                break
+                continue
 
-            # Image tensor (C,H,W)
-            processed_face = transform_inference(face_rgb_224)
-
-            # Landmarks tensor (K,2)
+            # ---- PREPROCESS ----
+            face_tensor = transform_inference(face_rgb_224)
             lmk_tensor = torch.from_numpy(lmks_np).float()
 
-            # Update sequences
-            if len(face_sequence) < sequence_length:
-                face_sequence.append(processed_face)
-                landmarks_sequence.append(lmk_tensor)
-            else:
-                face_sequence.pop(0)
-                landmarks_sequence.pop(0)
-                face_sequence.append(processed_face)
-                landmarks_sequence.append(lmk_tensor)
+            track["faces"].append(face_tensor)
+            track["landmarks"].append(lmk_tensor)
 
-            # Only run model when we have a full sequence
-            if len(face_sequence) == sequence_length:
-                # Images: (1, T, C, H, W)
-                input_tensor = torch.stack(face_sequence).unsqueeze(0).to(device)
-
-                # Landmarks: (1, T, K, 2)
-                landmarks_tensor = torch.stack(landmarks_sequence).unsqueeze(0).to(device)
+            # ---- MODEL INFERENCE ----
+            if len(track["faces"]) == sequence_length:
+                input_tensor = torch.stack(list(track["faces"])).unsqueeze(0).to(device)
+                landmarks_tensor = torch.stack(list(track["landmarks"])).unsqueeze(0).to(device)
 
                 with torch.no_grad():
-                    g_pred = model(input_tensor, landmarks=landmarks_tensor)  # (B,T,3) or (B,3)
-                    g_pred = g_pred[0]  # (T,3) or (3,)
+                    g_pred = model(input_tensor, landmarks=landmarks_tensor)[0]
 
-                if g_pred.ndim == 1:
-                    gaze_vec = g_pred.cpu().numpy()
-                else:
-                    gaze_vec = g_pred[-1].cpu().numpy()  # last in sequence
+                gaze_vec = g_pred[-1].cpu().numpy() if g_pred.ndim == 2 else g_pred.cpu().numpy()
 
                 gx, gy, gz = gaze_vec
-                print(f"RAW gaze_vec: gx={gx:.3f}, gy={gy:.3f}, gz={gz:.3f}")
+                gx, gy, gz = track["smoother"].smooth(gx, gy, gz)
 
-                #gx, gy, gz = smoother.smooth(gx, gy, gz)
-                #gx, gy, gz = mapper.apply_toggles(gx, gy, gz)
-                g_corr = np.array([gx, gy, gz], dtype=np.float32)
+                origin = (x1 + w // 2, y1 + h // 2)
+                draw_3d_arrow_perspective(frame, gaze_vec, origin, color=color)
 
-                #if calibrator.ready:
-                #    g_corr = calibrator.apply(g_corr)
-
-                # normalize to unit vector
-                #n = np.linalg.norm(g_corr) + 1e-6
-                #g_corr = g_corr / n
-
-                origin = (x + w // 2, y + h // 2)
-                frame = draw_3d_arrow_perspective(frame, g_corr, origin,
-                                                  color=(0, 0, 255), thickness=2, tipLength=0.2)
-            break  # only process first face
 
         # FPS computation / overlay (optional)
         curr_time = time.time()
@@ -676,6 +696,14 @@ def main():
         elif k == ord('-'):
             mapper.scale = max(10, mapper.scale - 10)
             print(f"[INFO] scale decreased to {mapper.scale}")
+
+        MAX_MISSING = 30  # frames
+
+        for tid in list(tracks.keys()):
+            if frame_idx - tracks[tid]["last_seen"] > MAX_MISSING:
+                del tracks[tid]
+
+        frame_idx += 1
 
     cap.release()
     out.release()

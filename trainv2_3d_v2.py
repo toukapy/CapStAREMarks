@@ -377,7 +377,7 @@ if __name__ == "__main__":
 
     model.set_capsule_input_dim(flattened_dim)
 
-    checkpoint = torch.load('22122025.pth')
+    checkpoint = torch.load('01122025.pth')
     state_dict = strip_prefix(checkpoint)
     model.load_state_dict(state_dict, strict=False)
 
@@ -391,10 +391,9 @@ if __name__ == "__main__":
         {"params": model.fusion.parameters(), "lr": 1e-4},
         {"params": model.lmk_fuse.parameters(), "lr": 1e-4},
         {"params": model.spatial_capsules.parameters(), "lr": 1e-4},
-    ], weight_decay=1e-4)
+    ], weight_decay=1e-5)
 
-    for param in model.encoder.parameters():
-        param.requires_grad = False
+
 
     model = torch.compile(model)
 
