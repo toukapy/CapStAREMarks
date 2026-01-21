@@ -12,6 +12,8 @@ from PIL import Image
 from typing import List, Tuple
 import random
 import os
+import math
+
 
 
 import mediapipe as mp
@@ -412,6 +414,121 @@ def unit_vectors_8():
 
 DIRECTIONS_8 = unit_vectors_8()
 
+REGION_NAMES = [
+    "UP",
+    "LEFT",
+    "BOTTOM",
+    "RIGHT",
+]
+
+
+def gaze_to_region(gx, gy):
+    """
+    Clasificación relajada en 4 direcciones.
+    """
+    angle = math.degrees(math.atan2(gy, gx))  # [-180, 180]
+
+    if 45 <= angle < 135:
+        return "UP"
+    elif angle >= 135 or angle < -135:
+        return "LEFT"
+    elif -135 <= angle < -45:
+        return "BOTTOM"
+    else:
+        return "RIGHT"
+
+
+def draw_region_grid(frame, active_region):
+    H, W, _ = frame.shape
+    cx, cy = W // 2, H // 2
+
+    regions = {
+        "UP": (cx, int(0.15 * H)),
+        "LEFT": (int(0.15 * W), cy),
+        "BOTTOM": (cx, int(0.85 * H)),
+        "RIGHT": (int(0.85 * W), cy),
+    }
+
+    for name, (x, y) in regions.items():
+        color = (0, 255, 255) if name == active_region else (180, 180, 180)
+        thickness = 4 if name == active_region else 2
+        cv2.circle(frame, (x, y), 22, color, thickness)
+        cv2.putText(
+            frame,
+            name,
+            (x - 35, y - 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+        )
+
+
+from collections import Counter
+
+class GazeRegionExperiment:
+    def __init__(self, path="gaze_experiment.txt"):
+        self.regions = REGION_NAMES
+        self.idx = 0
+        self.recording = False
+        self.finished = False
+        self.file = open(path, "w")
+
+    def current(self):
+        return self.regions[self.idx]
+
+    def start(self):
+        self.recording = True
+        self.file.write(f"\nTARGET: {self.current()}\n")
+        self.file.flush()
+        print(f"[EXP] START {self.current()}")
+
+    def stop(self):
+        # Write marker indicating which target ended here
+        self.file.write(f"NEXT: {self.current()}\n\n")
+        self.file.flush()
+
+        self.recording = False
+        self.idx += 1
+
+        if self.idx >= len(self.regions):
+            self.finish()
+
+    def log(self, region):
+        if self.recording:
+            self.file.write(region + "\n")
+
+    def finish(self):
+        self.finished = True
+        self.file.write("\nEXPERIMENT_FINISHED\n")
+        self.file.flush()
+        self.file.close()
+        print("[EXP] FINISHED")
+
+    def draw_ui(self, frame):
+        if self.finished:
+            cv2.putText(frame, "EXPERIMENT FINISHED",
+                        (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.9, (0, 255, 0), 2)
+            return
+
+        draw_region_grid(frame, self.current())
+
+        cv2.putText(frame, f"LOOK AT: {self.current()}",
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.9, (0, 255, 255), 2)
+
+        status = "RECORDING" if self.recording else "WAITING"
+        color = (0, 255, 0) if self.recording else (0, 0, 255)
+
+        cv2.putText(frame, f"STATUS: {status} | s=START  n=NEXT",
+                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7, color, 2)
+
+
+
+
+
 
 # ==========================
 # Suavizado temporal (opcional, mantenemos el tuyo)
@@ -538,12 +655,13 @@ def draw_3d_arrow_perspective(frame, gaze_vec, origin, color=(0,0,255), thicknes
 # ==========================
 def main():
     face_detector = load_face_detector()
-    model = load_model('11012026.pth')
+    model = load_model('22122025.pth')
 
     # MediaPipe face landmarker for landmarks (as in landmarks_in_video.py)
     landmarker = load_landmarker()
 
     cap = cv2.VideoCapture(0)
+    experiment = GazeRegionExperiment()
 
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -655,6 +773,10 @@ def main():
                 gx, gy, gz = gaze_vec
                 gx, gy, gz = track["smoother"].smooth(gx, gy, gz)
 
+                region = gaze_to_region(gx, gy)
+                experiment.log(region)
+
+
                 origin = (x1 + w // 2, y1 + h // 2)
                 draw_3d_arrow_perspective(frame, gaze_vec, origin, color=color)
 
@@ -669,10 +791,10 @@ def main():
         out.write(frame)
         cv2.imshow('Gaze Estimation', frame)
 
+        experiment.draw_ui(frame)
+
         k = cv2.waitKey(1) & 0xFF
-        if k == ord('q') or k == 27:
-            break
-        elif k == ord('c'):
+        if k == ord('c'):
             tmp = run_calibration(cap, model, face_detector, landmarker, mapper, device, n_per_dir=60)
             if tmp is not None:
                 calibrator = tmp
@@ -695,6 +817,16 @@ def main():
         elif k == ord('-'):
             mapper.scale = max(10, mapper.scale - 10)
             print(f"[INFO] scale decreased to {mapper.scale}")
+        elif k == ord('s'):
+            if not experiment.recording and not experiment.finished:
+                experiment.start()
+        elif k == ord('n'):
+            if experiment.recording:
+                experiment.stop()
+        if k == ord('q') or k == 27:
+            if not experiment.finished:
+                experiment.finish()
+            break
 
         MAX_MISSING = 30  # frames
 
