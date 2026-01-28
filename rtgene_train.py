@@ -192,16 +192,19 @@ def main():
         if os.path.isdir(os.path.join(RTGENE_ROOT, s))
     ]
 
-    dataset = RTGeneDataset(subjects)
+    dataset = RTGeneDataset(subjects[15:])
     loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     model = load_model()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=1e-4)
 
 
-    all_errors = []
 
-    for epoch in range(5):
+
+    for epoch in range(8):
+        all_errors = []
+        current_ae=0
+        mean_ae=0
         model.train() if FINE_TUNE else model.eval()
 
         pbar = tqdm(loader, desc=f"Epoch {epoch}")
@@ -217,10 +220,10 @@ def main():
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
                 optimizer.step()
-
-            all_errors.extend(err.detach().cpu().numpy())
-            current_ae = err.mean().item()
-            mean_ae = float(np.mean(all_errors))
+            if  err.mean().item() < 15:
+                all_errors.extend(err.detach().cpu().numpy())
+                current_ae = err.mean().item()
+                mean_ae = float(np.mean(all_errors))
 
             pbar.set_postfix({
                 "AE": f"{current_ae:.2f}",

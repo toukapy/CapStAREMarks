@@ -389,6 +389,49 @@ def preprocess_face(face_img):
     face_tensor = transform_inference(face_rgb)
     return face_tensor
 
+from collections import deque, Counter
+
+class RegionStabilizer:
+    def __init__(self,
+                 window_size=15,
+                 min_ratio=0.65,
+                 min_consecutive=5):
+        """
+        window_size: number of recent frames considered
+        min_ratio: fraction of window needed to accept a switch
+        min_consecutive: hard threshold for fast switch
+        """
+        self.window = deque(maxlen=window_size)
+        self.current_region = None
+        self.min_ratio = min_ratio
+        self.min_consecutive = min_consecutive
+
+    def update(self, region):
+        self.window.append(region)
+
+        if self.current_region is None:
+            self.current_region = region
+            return self.current_region
+
+        # --- Fast path: consecutive confirmations ---
+        if len(self.window) >= self.min_consecutive:
+            last = list(self.window)[-self.min_consecutive:]
+            if all(r == region for r in last):
+                self.current_region = region
+                return self.current_region
+
+        # --- Majority vote ---
+        counts = Counter(self.window)
+        dominant, count = counts.most_common(1)[0]
+
+        if dominant != self.current_region:
+            ratio = count / len(self.window)
+            if ratio >= self.min_ratio:
+                self.current_region = dominant
+
+        return self.current_region
+
+
 
 # ==========================
 # Direcciones para calibración (8)
@@ -470,7 +513,7 @@ def draw_region_grid(frame, active_region):
 from collections import Counter
 
 class GazeRegionExperiment:
-    def __init__(self, path="gaze_experiment.txt"):
+    def __init__(self, path="maitane_gaze_experiment_8.txt"):
         self.regions = REGION_NAMES
         self.idx = 0
         self.recording = False
@@ -734,6 +777,11 @@ def main():
                     "faces": deque(maxlen=sequence_length),
                     "landmarks": deque(maxlen=sequence_length),
                     "smoother": GazeSmoother(alpha=0.4),
+                    "region_stabilizer": RegionStabilizer(
+                        window_size=15,
+                        min_ratio=0.65,
+                        min_consecutive=5
+                    ),
                     "last_seen": frame_idx
                 }
 
@@ -776,9 +824,11 @@ def main():
                 gx, gy, gz = gaze_vec
                 gx, gy, gz = track["smoother"].smooth(gx, gy, gz)
 
-                region = gaze_to_region(gx, gy)
-                experiment.log(region)
+                raw_region = gaze_to_region(gx, gy)
 
+                stable_region = track["region_stabilizer"].update(raw_region)
+
+                experiment.log(stable_region)
 
                 origin = (x1 + w // 2, y1 + h // 2)
                 draw_3d_arrow_perspective(frame, gaze_vec, origin, color=color)

@@ -440,7 +440,7 @@ class GazeEstimationModel(nn.Module):
             if self.capsule_groups is not None:
                 num_capsules = len(self.capsule_groups)
             else:
-                num_capsules = 4  # fallback
+                num_capsules = 6  # fallback
 
         self.capsule_dim = capsule_dim
         self.num_capsules = num_capsules

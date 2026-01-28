@@ -19,9 +19,9 @@ from trainv2_3d_v2 import GazeDataset
 # =========================================================
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SEQ_LEN = 12
-H5_FILE = "xgaze_224/train/subject0010.h5"
-CHECKPOINT = "11012026.pth"
-OUT_DIR = "arch_viz2"
+H5_FILE = "xgaze_224/train/subject0000.h5"
+CHECKPOINT = "22122025.pth"
+OUT_DIR = "arch_viz"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # =========================================================
@@ -111,9 +111,10 @@ img_last = frames[0, last_t]
 lmks_last = landmarks[0, last_t].cpu().numpy()
 
 img_np = denormalize(img_last)
-cv2.imwrite(f"{OUT_DIR}/input_face.png", img_np)
+img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+cv2.imwrite(f"{OUT_DIR}/input_face.png", img_bgr)
 
-img_lmk = draw_landmarks(img_np, lmks_last)
+img_lmk = draw_landmarks(img_bgr, lmks_last)
 cv2.imwrite(f"{OUT_DIR}/input_with_landmarks.png", img_lmk)
 
 # =========================================================
@@ -125,7 +126,7 @@ colors = [
     (255,255,0), (255,0,255), (0,255,255)
 ]
 
-img_regions = img_np.copy()
+img_regions = img_bgr.copy()
 for g, c in zip(groups, colors):
     for idx in g:
         x, y = lmks_last[idx]
@@ -144,7 +145,22 @@ with torch.no_grad():
     flat_dim = encoder(dummy).reshape(1,-1).shape[1]
 
 model.set_capsule_input_dim(flat_dim)
-model.load_state_dict(torch.load(CHECKPOINT, map_location=DEVICE), strict=False)
+# =========================================================
+# LOAD CHECKPOINT (REMOVE _orig_mod PREFIX)
+# =========================================================
+ckpt = torch.load(CHECKPOINT, map_location=DEVICE)
+
+new_state = {}
+for k, v in ckpt.items():
+    if k.startswith("_orig_mod."):
+        k = k[len("_orig_mod."):]
+    new_state[k] = v
+
+missing, unexpected = model.load_state_dict(new_state, strict=True)
+
+print("[OK] Checkpoint loaded cleanly")
+
+
 model.eval()
 
 # =========================================================
@@ -167,8 +183,32 @@ with torch.no_grad():
     tokens = model.spatial_capsules(feat_bt, Hmaps)
 
     feat_last = feat_bt[last_t]
+
     H_last = Hmaps[last_t]
     tokens_last = tokens[last_t]
+
+
+# =========================================================
+# GAZE PREDICTION (CORRECT API)
+# =========================================================
+with torch.no_grad():
+    img_last_b = frames[:, last_t]        # (1,3,224,224)
+    lmks_last_b = landmarks[:, last_t]    # (1,478,2)
+
+    gaze_out = model(img_last_b, landmarks=lmks_last_b)  # (1,3)
+    gaze_vec = gaze_out.squeeze(0).cpu().numpy()         # (3,)
+
+gx, gy, gz = gaze_vec
+# =========================================================
+# ARROW ORIGIN: EYE CENTER
+# =========================================================
+groups = get_mediapipe_landmark_groups(device="cpu")
+eye_idx = torch.cat([groups[0], groups[1]]).numpy()  # left + right eye
+
+eye_center = lmks_last[eye_idx].mean(axis=0)
+eye_center = tuple(eye_center.astype(int))
+
+
 
 # =========================================================
 # REGION HEATMAPS (TOP-VALUES, PERCENTILE-BASED)
@@ -197,7 +237,7 @@ for m in range(H_up.size(0)):
         cv2.COLORMAP_INFERNO
     )
 
-    overlay = cv2.addWeighted(img_np, 0.65, heat, 0.35, 0)
+    overlay = cv2.addWeighted(img_bgr, 0.65, heat, 0.35, 0)
     cv2.imwrite(f"{OUT_DIR}/region_heatmap_strong_{m}.png", overlay)
 
 # =========================================================
@@ -238,6 +278,38 @@ token_maps_up = F.interpolate(
 # 3) GLOBAL normalization (capsules compete)
 token_maps_up = token_maps_up / (token_maps_up.max() + 1e-6)
 
+# =========================================================
+# DRAW 3D GAZE ARROW
+# =========================================================
+if abs(gz) < 1e-6:
+    gz = 1e-6  # avoid division by zero
+
+gx_2d = gx / gz
+gy_2d = gy / gz
+
+ARROW_LEN = 40
+
+end_point = (
+    int(eye_center[0] + gx_2d * ARROW_LEN),
+    int(eye_center[1] - gy_2d * ARROW_LEN)  # minus because image Y goes down
+)
+
+
+img_gaze = img_bgr.copy()
+
+cv2.arrowedLine(
+    img_gaze,
+    eye_center,
+    end_point,
+    color=(0, 255, 255),
+    thickness=3,
+    tipLength=0.25
+)
+
+cv2.imwrite(f"{OUT_DIR}/input_with_gaze_arrow.png", img_gaze)
+
+
+
 # 4) Percentile thresholding + visualization
 for m in range(M):
     hm = token_maps_up[m]
@@ -254,7 +326,7 @@ for m in range(M):
     )
 
     overlay = cv2.addWeighted(
-        img_np, 0.6,
+        img_bgr, 0.6,
         heat, 0.4,
         0
     )

@@ -467,7 +467,7 @@ def draw_region_grid(frame, active_region):
 from collections import Counter
 
 class GazeRegionExperiment:
-    def __init__(self, path="gaze_experiment.txt"):
+    def __init__(self, path="maitane_gaze_experiment_4.txt"):
         self.regions = REGION_NAMES
         self.idx = 0
         self.recording = False
