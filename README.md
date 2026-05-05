@@ -14,7 +14,7 @@ CapStARE-LM is a landmark-guided extension of CapStARE that introduces explicit 
 
 # Benchmark Performance
 
-| Method       | ETH-XGaze ↓ | MPIIFaceGaze ↓ | RT-GENE   | Inference ↓ | Calibration |
+| Method       | ETH-XGaze ↑ | MPIIFaceGaze ↓ | RT-GENE ↓ | Inference ↑ | Calibration |
 | ------------ | ----------- | -------------- | --------- | ----------- | ----------- |
-| CapStARE     | **3.65°**   | 7.98°          | 7.36°     | 1.126 ms    | Required    |
+| CapStARE     | **3.65°**   | 7.98°          | 7.36°     | **1.126 ms**| Required    |
 | CapStARE-LM  | 5.35º       | **4.48º**      | **5.46º** | 2.080 ms    | No          |
