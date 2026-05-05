@@ -14,7 +14,16 @@ CapStARE-LM is a landmark-guided extension of CapStARE that introduces explicit 
 
 # Benchmark Performance
 
-| Method       | ETH-XGaze ↑ | MPIIFaceGaze ↓ | RT-GENE ↓ | Inference ↑ | Calibration |
-| ------------ | ----------- | -------------- | --------- | ----------- | ----------- |
-| CapStARE     | **3.65°**   | 7.98°          | 7.36°     | **1.126 ms**| Required    |
-| CapStARE-LM  | 5.35º       | **4.48º**      | **5.46º** | 2.080 ms    | No          |
+| Method           | ETH-XGaze ↑ | MPIIFaceGaze ↓ | RT-GENE ↓ | Inference ↑ | Calibration |
+| ---------------- | ----------- | -------------- | --------- | ----------- | ----------- |
+| CapStARE         | **3.65°**   | 7.98°          | 7.36°     | **1.126 ms**| Required    |
+| **CapStARE-LM**  | 5.35º       | **4.48º**      | **5.46º** | 2.080 ms    | No          |
+
+CapStARE-LM sacrifices slight in-domain ETH-XGaze specialization to dramatically improve unseen-subject and unseen-environment robustness, making it more suitable for practical deployment.
+
+# Real-time Region Estimation
+
+| Method          | 4 Directions Accuracy | 8 Directions Accuracy |
+| --------------- | --------------------- | --------------------- |
+| CapStARE        | 50%                   | 32%                   |
+| **CapStARE-LM** | 80%                   | 70%                   |
