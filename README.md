@@ -27,3 +27,19 @@ CapStARE-LM sacrifices slight in-domain ETH-XGaze specialization to dramatically
 | --------------- | --------------------- | --------------------- |
 | CapStARE        | 50%                   | 32%                   |
 | **CapStARE-LM** | 80%                   | 70%                   |
+
+In live webcam experiments with 13 participants, CapStARE-LM demonstrated substantially better real-time decision stability and more coherent directional confusion patterns.
+
+# Why CapStARE-LM?
+
+Unlike prior landmark-guided methods that use landmarks only as auxiliary signals, CapStARE-LM integrates landmarks directly into the representation space itself. This transforms facial geometry into a strctural prior, improving:
+
+- Cross-subject consistency
+- Domain generalization
+- Occlusion robustness
+- Interpretability
+- Reduced dependence on identity or lighting cues.
+
+# Contact
+
+For questions, open an issue or contact: miren.samaniego@ehu.eus
